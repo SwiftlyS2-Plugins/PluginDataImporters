@@ -7,8 +7,7 @@
 ---
 
 > [!NOTE]
-> Your old tables are only ever read, never changed. If a result looks wrong, delete the new
-> plugin's tables and run the importer again.
+> Your old tables are only read, never changed. If a result looks wrong, delete the new plugin's tables and run the importer again.
 
 ## 📦 Importers
 
