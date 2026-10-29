@@ -41,25 +41,36 @@ Forgetting step 5 is harmless — an importer will not run twice.
 
 ## 🛠️ Building
 
-Importers compile against the contract of the plugin they target, and those contracts are not
-published as packages. Clone the target's repository **beside this one**:
-
-```
-SwiftlyS2 Forks - Core Plugins/
-├── PluginDataImporters/
-└── Ranks/
-```
+Nothing but this repo is needed. Each importer vendors the contract of the plugin it targets under
+its own `deps/`, so there is no sibling checkout to arrange:
 
 ```bash
 dotnet publish Ranks_Importer/Ranks_Importer.csproj -c Release
 ```
 
-If the target lives somewhere else, pass its path:
+The zip lands in `Ranks_Importer/build/`.
 
-```bash
-dotnet publish Ranks_Importer/Ranks_Importer.csproj -c Release -p:RanksRepo=/path/to/Ranks
+A vendored contract can go stale. When the target plugin ships a changed one, refresh it from a
+local clone and rebuild:
+
+```powershell
+pwsh Ranks_Importer/docs/update-deps.ps1 -RanksRepo ../Ranks -Build
 ```
 
-An importer must never ship the target's `*.Contract.dll`. The reference is `Private="false"` for
-that reason: a second copy gives the interface two type identities and the handshake silently stops
-matching on a server where the target plugin is plainly running.
+**An importer must never ship the contract it compiled against.** The reference is `Private=false`
+for that reason: a second copy gives the interface two type identities, and the shared-interface
+handshake then silently stops matching on a server where the target plugin is plainly running. The
+release workflow fails if a contract assembly reaches the publish output or the zip.
+
+## ✅ Checks
+
+| What | How |
+|------|-----|
+| Release workflow logic | `docker run --rm -v "${PWD}:/src:ro" debian:bookworm-slim bash -c "apt-get update -qq && apt-get install -y -qq git python3 python3-yaml zip unzip && cp -r /src /work && cd /work && bash docs/verify-release-workflow.sh"` |
+| Ranks_Importer mapping and packaging | `pwsh Ranks_Importer/docs/verify-mapping.ps1` |
+
+## 🚢 Releasing
+
+Importers are versioned and released independently. Bump the importer's `CHANGELOG.md` and its
+`PluginMetadata.Version` to match, then either push with `[release Ranks_Importer]` in the commit
+message or run the workflow by hand and pick it from the list. The tag is `Ranks_Importer-v1.0.0`.

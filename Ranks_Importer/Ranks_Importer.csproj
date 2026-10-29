@@ -8,9 +8,6 @@
     <RootNamespace>Ranks.Importer</RootNamespace>
     <OutputPath>$(MSBuildThisFileDirectory)build/</OutputPath>
     <PublishDir>$(OutputPath)publish/Ranks_Importer</PublishDir>
-    <!-- Ranks.Contract ships no package, so this compiles against a checkout of the Ranks repo
-         beside this one. CI passes -p:RanksRepo=<path> after checking it out elsewhere. -->
-    <RanksRepo Condition="'$(RanksRepo)' == ''">$(MSBuildThisFileDirectory)../../Ranks</RanksRepo>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,11 +19,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Private=false is load-bearing, not tidiness: copying Ranks.Contract.dll next to this
-         plugin makes the host load a SECOND one, giving IRanksApi two Type identities, and
-         TryGetSharedInterface silently stops matching on a server where Ranks is plainly running
-         (FR-API-00). -->
-    <ProjectReference Include="$(RanksRepo)/Ranks.Contract/Ranks.Contract.csproj" Private="false" />
+    <!-- Compile-time only. Private=false is load-bearing, not tidiness: copying Ranks.Contract.dll
+         next to this plugin makes the host load a SECOND one, giving IRanksApi two Type identities,
+         and TryGetSharedInterface silently stops matching on a server where Ranks is plainly
+         running (FR-API-00). Refresh with docs/update-deps.ps1 when Ranks ships a new contract. -->
+    <Reference Include="Ranks.Contract">
+      <HintPath>$(MSBuildThisFileDirectory)deps/Ranks.Contract.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <UsingTask TaskName="ExtractPluginVersion"

@@ -1,0 +1,372 @@
+<?xml version="1.0"?>
+<doc>
+    <assembly>
+        <name>Ranks.Contract</name>
+    </assembly>
+    <members>
+        <member name="T:Ranks.Contract.IRanksApi">
+            <summary>The <c>Ranks.Api.v1</c> shared interface.</summary>
+            <remarks>
+            Additive only after 1.0 — there is no package registry and therefore no version negotiation,
+            so a renamed or re-signed member is a <c>MissingMethodException</c> at call time rather than a
+            build error anyone sees (FR-API-00).
+            </remarks>
+        </member>
+        <member name="F:Ranks.Contract.IRanksApi.InterfaceKey">
+            <summary>The shared-interface key modules bind against.</summary>
+        </member>
+        <member name="P:Ranks.Contract.IRanksApi.IsCoreReady">
+            <summary>True once configuration is bound and the schema probe has run.</summary>
+        </member>
+        <member name="E:Ranks.Contract.IRanksApi.CoreReady">
+            <remarks>
+            Fires once per load cycle. Check <see cref="P:Ranks.Contract.IRanksApi.IsCoreReady"/> first — a module loading after
+            core would otherwise subscribe to an event that has already fired.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.GetDesiredClanTag(System.UInt64)">
+            <summary>The tag core would write, or null when clan tags are off or the player is absent.</summary>
+            <remarks>Read-only and side-effect free, so a tag arbiter can ask without fighting core.</remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.GetStat(System.UInt64,System.String)">
+            <summary>Reads one of core's fixed counters by key, e.g. <c>core.kills</c>.</summary>
+            <remarks>
+            Stat keys keep the <c>core.</c> prefix that point-event keys dropped, so the event key
+            <c>kill</c> here is not an error and returns 0 forever. Read-only by design; core is the
+            single writer.
+            </remarks>
+        </member>
+        <member name="E:Ranks.Contract.IRanksApi.PlayerDataLoaded">
+            <remarks>Every event below is raised on the game thread, and that is part of the contract.</remarks>
+        </member>
+        <member name="E:Ranks.Contract.IRanksApi.PlayersPurged">
+            <summary>Purged SteamIDs, so a module can sweep its own tables in the same pass (FR-DB-08).</summary>
+        </member>
+        <member name="E:Ranks.Contract.IRanksApi.MaintenanceDue">
+            <summary>Core's quiet window, raised after core's own maintenance completes (FR-DB-09).</summary>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.SetKillArbiter(Ranks.Contract.IRanksKillArbiter)">
+            <summary>Registers the arbiter core consults before awarding a kill, or null to clear it.</summary>
+            <remarks>
+            At most one is active: a second registration replaces the first, the same single-authority
+            constraint as absolute scoring (FR-PTS-00). Core does not police the operator pairing it
+            with a rating module.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.GetPointSettings">
+            <summary>A fresh snapshot per call, so it tracks live config reloads.</summary>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.ResolveTableName(System.String)">
+            <summary>Applies the operator's prefix and suffix to a base name such as <c>ranks_players</c>.</summary>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.RegisterMigrations(System.Reflection.Assembly,System.String)">
+            <summary>Hands an assembly's migrations to core, which owns the runner.</summary>
+            <remarks>
+            Call from the handshake, not <c>Load</c> — there is no API yet in <c>Load</c>. Idempotent:
+            core dedupes on (assembly, pluginId) and migrates each exactly once per process.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.RegisterMenuEntry(System.String,Ranks.Contract.RanksMenuEntry)">
+             <summary>Adds one line to core's menu, under the section the entry names.</summary>
+             <remarks>
+             Call from the handshake, after core is ready. Entries are keyed on
+             (<paramref name="moduleId"/>, <c>Section</c>, <c>Label</c>), so re-registering the same row
+             after a config reload replaces it rather than doubling it.
+            
+             Core never names a module type: it holds the delegate and a string, both declared here.
+             That is also why <see cref="M:Ranks.Contract.IRanksApi.UnregisterMenuEntries(System.String)"/> is not optional — an entry outliving
+             its module is a delegate into an unloaded assembly.
+             </remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.UnregisterMenuEntries(System.String)">
+            <summary>Drops every entry a module registered. Idempotent.</summary>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.SetDisplayOverride(SwiftlyS2.Shared.Players.IPlayer,Ranks.Contract.RanksDisplayOverride)">
+            <summary>Overlays what the scoreboard shows for one player, leaving stored points alone.</summary>
+            <remarks>
+            Applies immediately. Every display surface core owns — the rank icon, the mode it is drawn
+            in, the clan tag and the synced score — is resolved from the overlay, so a module never has
+            to write those fields itself and never fights core for the tag (FR-API-02).
+            <para>
+            Session-scoped: dropped when the player disconnects, never persisted. A module that wants it
+            to survive a reconnect re-applies it from <c>PlayerDataLoaded</c>.
+            </para>
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.SavePlayerAsync(System.UInt64)">
+            <summary>False when the SteamID is not tracked; a failed load leaves a player untracked.</summary>
+        </member>
+        <member name="M:Ranks.Contract.IRanksApi.SaveAllAsync">
+            <summary>Returns records committed. Coalesces — a concurrent call joins the in-flight pass.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksKillContext">
+            <summary>The facts core derived about one kill, handed to the arbiter (FR-API-11).</summary>
+            <remarks>
+            Flag-shaped facts arrive in <see cref="P:Ranks.Contract.RanksKillContext.Attributes"/>; valued ones stay as fields because an
+            arbiter matching "past 2000 units" or "hitgroup 5" needs the number, and core cannot pre-expand
+            a set entry for every threshold somebody might configure.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksKillContext.#ctor(System.UInt64,System.Nullable{System.UInt64},System.Boolean,System.Boolean,System.String,System.Single,System.Int32,System.Collections.Generic.IReadOnlySet{System.String})">
+            <summary>The facts core derived about one kill, handed to the arbiter (FR-API-11).</summary>
+            <remarks>
+            Flag-shaped facts arrive in <see cref="P:Ranks.Contract.RanksKillContext.Attributes"/>; valued ones stay as fields because an
+            arbiter matching "past 2000 units" or "hitgroup 5" needs the number, and core cannot pre-expand
+            a set entry for every threshold somebody might configure.
+            </remarks>
+        </member>
+        <member name="T:Ranks.Contract.RanksKillClaim">
+            <summary>An arbiter's answer: award this instead of, or alongside, core's own kill awards.</summary>
+            <remarks>
+            <paramref name="Reason"/> is a stable key, never prose — it is written to the detail log and
+            carried on <c>PointsChanged</c>, so translated text there would make a module-facing identity
+            change with the server's language. <paramref name="DisplayText"/> carries the words.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksKillClaim.#ctor(System.String,System.Int32,System.String,System.Boolean)">
+            <summary>An arbiter's answer: award this instead of, or alongside, core's own kill awards.</summary>
+            <remarks>
+            <paramref name="Reason"/> is a stable key, never prose — it is written to the detail log and
+            carried on <c>PointsChanged</c>, so translated text there would make a module-facing identity
+            change with the server's language. <paramref name="DisplayText"/> carries the words.
+            </remarks>
+        </member>
+        <member name="T:Ranks.Contract.IRanksKillArbiter">
+             <summary>Consulted by core before it awards a kill (FR-API-11).</summary>
+             <remarks>
+             Core asks *before* awarding rather than letting a module react afterwards, which is the only
+             ordering under which suppression is expressible: a module hooking <c>player_death</c> itself
+             cannot stop core, and plugin order is not guaranteed.
+            
+             Runs on the game thread inside core's award path. Returning fast matters, and touching the
+             database here does not.
+             </remarks>
+        </member>
+        <member name="M:Ranks.Contract.IRanksKillArbiter.ClaimKill(Ranks.Contract.RanksKillContext)">
+            <summary>The claim for this kill, or null to leave it entirely to core.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksKillAttributes">
+            <summary>The flag attributes core puts in <see cref="P:Ranks.Contract.RanksKillContext.Attributes"/>.</summary>
+            <remarks>
+            Named for the <c>player_death</c> field each one reads, so an operator can check a name against
+            an event dump rather than against documentation. Shared rather than duplicated per side: core
+            writes these strings and an arbiter matches them, and a typo in either is silent.
+            </remarks>
+        </member>
+        <member name="F:Ranks.Contract.RanksKillAttributes.Penetrated">
+            <remarks>The field is a count, not a flag; present when it is above zero.</remarks>
+        </member>
+        <member name="F:Ranks.Contract.RanksKillAttributes.Dominated">
+            <inheritdoc cref="F:Ranks.Contract.RanksKillAttributes.Penetrated"/>
+        </member>
+        <member name="F:Ranks.Contract.RanksKillAttributes.Revenge">
+            <inheritdoc cref="F:Ranks.Contract.RanksKillAttributes.Penetrated"/>
+        </member>
+        <member name="F:Ranks.Contract.RanksKillAttributes.TeamKill">
+            <summary>Attacker and victim on the same team.</summary>
+        </member>
+        <member name="F:Ranks.Contract.RanksKillAttributes.All">
+            <summary>Every flag core can emit, for an arbiter validating configured names at load.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksMenuSections">
+            <summary>The branches of core's menu a module may hang an entry from.</summary>
+            <remarks>
+            Plain strings rather than an enum: the contract is additive-only after 1.0, and a new member on
+            a shared enum changes the type's layout for every module already compiled against it.
+            An unrecognised section is dropped rather than invented, so a module targeting a newer core
+            degrades to "entry missing" instead of appearing somewhere nobody designed.
+            </remarks>
+        </member>
+        <member name="F:Ranks.Contract.RanksMenuSections.Statistics">
+            <summary>Under <c>Statistics</c>, beside core's own counters.</summary>
+        </member>
+        <member name="F:Ranks.Contract.RanksMenuSections.Settings">
+            <summary>Under <c>Settings</c>, beside core's own preferences.</summary>
+        </member>
+        <member name="F:Ranks.Contract.RanksMenuSections.Root">
+            <summary>A top-level row on the root menu. Use sparingly — the root is the one screen every player sees.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksMenuEntry">
+            <summary>One line a module contributes to core's menu.</summary>
+            <remarks>
+            <para>
+            The module hands over a <em>factory</em>, not rows: core calls <see cref="P:Ranks.Contract.RanksMenuEntry.Build"/> when the
+            player opens the parent and nests whatever comes back, so the module owns its own layout,
+            paging and colours. A menu with no parent of its own is adopted by the entry that opened it,
+            which is what makes the player's back key return to core's menu rather than close everything.
+            </para>
+            <para>
+            <see cref="P:Ranks.Contract.RanksMenuEntry.Build"/> runs on the game thread and must not block. Load inside a
+            <c>PagedCollectionComponent</c>, which is built for exactly this and is how core's own
+            leaderboard reads the database.
+            </para>
+            </remarks>
+        </member>
+        <member name="P:Ranks.Contract.RanksMenuEntry.Section">
+            <summary>One of the <see cref="T:Ranks.Contract.RanksMenuSections"/> constants.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksMenuEntry.Label">
+            <summary>Already localized — core shows it verbatim, because core ships no key for it.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksMenuEntry.Build">
+            <summary>Returns the menu to nest, or null to render the row greyed out.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksMenuEntry.Order">
+            <summary>Ascending; core's own entries sit at 0, so a negative value sorts above them.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksModuleBase">
+            <summary>Data and lifecycle base for a Ranks module.</summary>
+            <remarks>
+            Acquisition and the JIT isolation stay in the module's own BasePlugin — a constructor parameter
+            typed <see cref="T:Ranks.Contract.IRanksApi"/> means the caller already holds one (FR-API-08).
+            </remarks>
+        </member>
+        <member name="P:Ranks.Contract.RanksModuleBase.ModuleId">
+            <summary>The module's own <c>[PluginMetadata]</c> id — core derives the ledger from it.</summary>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.RegisterMigrations(System.Reflection.Assembly)">
+            <summary>Hands this module's migrations to core, which owns the runner (FR-DB-05).</summary>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.RegisterMenuEntry(System.String,System.String,System.Func{SwiftlyS2.Shared.Players.IPlayer,SwiftlyS2.Shared.Menu.IMenu},System.Int32)">
+            <summary>Hangs one line off core's menu (FR-CMD-04).</summary>
+            <remarks>
+            <see cref="M:Ranks.Contract.RanksModuleBase.Unregister"/> drops it again, so an override that registers here needs no
+            matching teardown of its own.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.OnCoreReady">
+            <remarks>Every handler below is raised on the game thread, so an override may touch players directly.</remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.OnPointsChanging(Ranks.Contract.RanksPointsChangingArgs)">
+            <remarks>
+            Subscriber order across modules is undefined and each sees the previous one's Amount, so two
+            modules scaling one award compose in an order nobody chose. Do not score here — call
+            <c>AddPoints</c> with your own number.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.Register">
+            <summary>Subscribes and resolves readiness. Idempotent — call it from <c>Load</c>.</summary>
+            <remarks>
+            The guard is what the handshake makes necessary: it re-runs on every plugin load and unload,
+            so an unguarded <c>+=</c> is one duplicate subscription per rebuild.
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.Unregister">
+            <summary>Unsubscribes. Idempotent — call it from <c>Unload</c>.</summary>
+        </member>
+        <member name="M:Ranks.Contract.RanksModuleBase.RaiseCoreReady">
+            <remarks>Guarded separately from <see cref="M:Ranks.Contract.RanksModuleBase.Register"/>: a re-register after core came up must not re-run it.</remarks>
+        </member>
+        <member name="T:Ranks.Contract.RanksPlayerSnapshot">
+            <summary>An immutable view of a player's record, taken at the moment of the call.</summary>
+            <remarks>
+            Carries no leaderboard position: everything here is already resident, so building one is
+            allocation-only, while "47th of 3812" needs a query — <c>GetPositionAsync</c> (FR-API-02).
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksPlayerSnapshot.#ctor(System.UInt64,System.String,System.Int32,System.String,System.String,System.Int32,System.Int64,System.Int64,System.Int64,System.Int64,System.Int64,System.Int64,System.Int64,System.Int64,System.Int64,System.DateTime,System.DateTime)">
+            <summary>An immutable view of a player's record, taken at the moment of the call.</summary>
+            <remarks>
+            Carries no leaderboard position: everything here is already resident, so building one is
+            allocation-only, while "47th of 3812" needs a query — <c>GetPositionAsync</c> (FR-API-02).
+            </remarks>
+        </member>
+        <member name="T:Ranks.Contract.RanksLeaderboardEntry">
+            <summary>One row of a leaderboard query.</summary>
+        </member>
+        <member name="M:Ranks.Contract.RanksLeaderboardEntry.#ctor(System.Int32,System.UInt64,System.String,System.Int64,System.String,System.String)">
+            <summary>One row of a leaderboard query.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksPointsChangedArgs">
+            <summary>Raised after a point change has been applied.</summary>
+        </member>
+        <member name="M:Ranks.Contract.RanksPointsChangedArgs.#ctor(System.UInt64,System.Int32,System.Int32,System.Int32,System.String)">
+            <summary>Raised after a point change has been applied.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksRankChangedArgs">
+            <summary>Raised when a player crosses a ladder threshold in either direction.</summary>
+        </member>
+        <member name="M:Ranks.Contract.RanksRankChangedArgs.#ctor(System.UInt64,System.Int32,System.String,System.String,System.Int32,System.Int32,System.Boolean)">
+            <summary>Raised when a player crosses a ladder threshold in either direction.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksPointsChangingArgs">
+            <summary>A mutable award, raised before core writes it.</summary>
+            <remarks>
+            A class rather than a record struct because subscribers mutate it — a struct would be copied
+            per subscriber and every change discarded. Fires for core's own awards only, never for
+            <c>AddPoints</c> / <c>SetPoints</c> (FR-API-04).
+            </remarks>
+        </member>
+        <member name="P:Ranks.Contract.RanksPointsChangingArgs.EventKey">
+            <summary>Core's event key, e.g. <c>death</c>.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksPointsChangingArgs.CounterpartySteamId">
+            <summary>Attacker on a death, victim on a kill; null when there is no counterparty.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksPointsChangingArgs.BaseAmount">
+            <summary>Configured value multiplied by occurrence count, before any multiplier.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksPointsChangingArgs.Amount">
+            <remarks>Subscribers run in subscription order and each sees the previous one's value.</remarks>
+        </member>
+        <member name="P:Ranks.Contract.RanksPointsChangingArgs.Cancel">
+            <summary>Suppresses the write entirely; <c>PointsChanged</c> does not then fire.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksPointSettings">
+            <summary>A snapshot of every point-related setting the operator configured.</summary>
+            <remarks>
+            Readable in both modes — with <c>UseCoreRankingLogic</c> off core applies none of these itself,
+            so a rating module reads them as the operator's intent rather than as core's behaviour
+            (FR-API-05).
+            </remarks>
+        </member>
+        <member name="M:Ranks.Contract.RanksPointSettings.#ctor(System.Boolean,System.Int32,System.Boolean,System.Boolean,System.Boolean,System.Double,System.Collections.Generic.IReadOnlyList{System.String},System.Boolean,System.Double,System.Double,System.Boolean,System.Double,System.Double,System.Int32,System.Int32,System.Collections.Generic.IReadOnlyDictionary{System.String,System.Int32})">
+            <summary>A snapshot of every point-related setting the operator configured.</summary>
+            <remarks>
+            Readable in both modes — with <c>UseCoreRankingLogic</c> off core applies none of these itself,
+            so a rating module reads them as the operator's intent rather than as core's behaviour
+            (FR-API-05).
+            </remarks>
+        </member>
+        <member name="T:Ranks.Contract.RanksDisplayOverride">
+            <summary>What the scoreboard should show for one player, instead of their stored standing.</summary>
+            <remarks>
+            Every field is optional and independently overridable; a null field keeps core's own answer.
+            This is the mechanism a prestige-style module uses: deduct from <see cref="P:Ranks.Contract.RanksDisplayOverride.Points"/> and the
+            tier, icon and tag all follow, because core resolves them from the displayed value rather than
+            the stored one. Nothing here is written to the database (FR-API-07).
+            </remarks>
+            <param name="Points">Points to display and to resolve the ladder tier from.</param>
+            <param name="RankMode">One of <see cref="T:Ranks.Contract.RanksDisplayModes"/>; unparseable values are ignored.</param>
+            <param name="TagPrefix">Prepended to the tier's clan tag, so core still owns the field.</param>
+        </member>
+        <member name="M:Ranks.Contract.RanksDisplayOverride.#ctor(System.Nullable{System.Int32},System.String,System.String)">
+            <summary>What the scoreboard should show for one player, instead of their stored standing.</summary>
+            <remarks>
+            Every field is optional and independently overridable; a null field keeps core's own answer.
+            This is the mechanism a prestige-style module uses: deduct from <see cref="P:Ranks.Contract.RanksDisplayOverride.Points"/> and the
+            tier, icon and tag all follow, because core resolves them from the displayed value rather than
+            the stored one. Nothing here is written to the database (FR-API-07).
+            </remarks>
+            <param name="Points">Points to display and to resolve the ladder tier from.</param>
+            <param name="RankMode">One of <see cref="T:Ranks.Contract.RanksDisplayModes"/>; unparseable values are ignored.</param>
+            <param name="TagPrefix">Prepended to the tier's clan tag, so core still owns the field.</param>
+        </member>
+        <member name="P:Ranks.Contract.RanksDisplayOverride.Points">
+            <summary>Points to display and to resolve the ladder tier from.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksDisplayOverride.RankMode">
+            <summary>One of <see cref="T:Ranks.Contract.RanksDisplayModes"/>; unparseable values are ignored.</summary>
+        </member>
+        <member name="P:Ranks.Contract.RanksDisplayOverride.TagPrefix">
+            <summary>Prepended to the tier's clan tag, so core still owns the field.</summary>
+        </member>
+        <member name="T:Ranks.Contract.RanksDisplayModes">
+            <summary>Values accepted by <see cref="P:Ranks.Contract.RanksDisplayOverride.RankMode"/>.</summary>
+            <remarks>
+            Strings rather than an enum because the enum lives in core's own assembly, which a module does
+            not reference. Core parses these by name, so they must match <c>RankDisplayMode</c> exactly.
+            </remarks>
+        </member>
+    </members>
+</doc>

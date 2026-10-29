@@ -252,6 +252,55 @@ foreach ($k in 'Source','Destination') {
   } else { Bad "Database.$k is missing or undocumented" }
 }
 
+# ---- The vendored contract must compile in but never ship -------------------
+
+Write-Host ""
+Write-Host "=== the provider contract is vendored, referenced and not shipped ===" -ForegroundColor Cyan
+
+$proj = Get-Content "$PSScriptRoot\..\Ranks_Importer.csproj" -Raw
+$depsDll = "$PSScriptRoot\..\deps\Ranks.Contract.dll"
+
+if (Test-Path $depsDll) { Ok "deps/Ranks.Contract.dll is present, so a build needs only this repo" }
+else { Bad "deps/Ranks.Contract.dll is missing - run docs/update-deps.ps1" }
+
+if ($proj -match '(?s)<Reference Include="Ranks\.Contract">.*?deps/Ranks\.Contract\.dll.*?</Reference>') {
+  Ok "the csproj references it out of deps/"
+} else { Bad "the csproj does not reference deps/Ranks.Contract.dll" }
+
+# A second copy next to the plugin gives IRanksApi two type identities and the handshake stops
+# matching - on a server where Ranks is plainly running, with nothing in the log to explain it.
+if ($proj -match '(?s)<Reference Include="Ranks\.Contract">.*?<Private>false</Private>.*?</Reference>') {
+  Ok "and marks it Private=false, so it is compile-time only"
+} else { Bad "the deps reference is not Private=false - it would ship beside the plugin" }
+
+if ($proj -notmatch 'RanksRepo' -and $proj -notmatch 'ProjectReference') {
+  Ok "no sibling-checkout path survives in the csproj"
+} else { Bad "the csproj still points at another repository" }
+
+# Only meaningful after a publish; skipped on a clean tree rather than failing.
+$publish = "$PSScriptRoot\..\build\publish"
+if (Test-Path $publish) {
+  $stowaway = Get-ChildItem $publish -Recurse -Filter '*.Contract.dll' -ErrorAction SilentlyContinue
+  if ($stowaway) { Bad "the last publish shipped: $($stowaway.Name -join ', ')" }
+  else { Ok "the last publish output carries no contract assembly" }
+}
+
+# The five members the bridge actually calls. A wrong or ancient DLL vendored here compiles
+# against a shape the running Ranks does not have, which only shows up as a failed handshake.
+$bytes = if (Test-Path $depsDll) { [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($depsDll)) } else { '' }
+$used = 'InterfaceKey','IsCoreReady','CoreReady','ConnectionName','ResolveTableName'
+$absent = $used | Where-Object { $bytes -notlike "*$_*" }
+if (-not $absent -and $bytes) { Ok "it exposes all $($used.Count) members RanksBridge calls" }
+else { Bad "the vendored contract is missing: $($absent -join ', ')" }
+
+$apiSource = "$ranks\Ranks.Contract\IRanksApi.cs"
+if (Test-Path $apiSource) {
+  $api = Get-Content $apiSource -Raw
+  $gone = $used | Where-Object { $api -notmatch [regex]::Escape($_) }
+  if ($gone) { Bad "Ranks no longer declares $($gone -join ', ') - deps/ is stale, run docs/update-deps.ps1" }
+  else { Ok "and Ranks still declares every one of them" }
+}
+
 # ---- Three READMEs advertise one list between them --------------------------
 
 Write-Host ""
@@ -268,14 +317,10 @@ function Bold-Links($text) {
 
 $lists = [ordered]@{}
 
-# Ranks' own README: the links after "imports from", which is the list itself. The link to the
-# importer repo sits before it, and author credits are skipped, so neither reads as a plugin.
-$rootNote = ([regex]::Match((Get-Content "$ranks\README.md" -Raw), '(?s)imports from.*?\n\s*\n')).Value
-$rootList = @{}
-foreach ($m in [regex]::Matches($rootNote, '(?<!by )\[([^\]]+)\]\((https://github\.com/[^)]+)\)')) {
-  $rootList[$m.Groups[1].Value] = $m.Groups[2].Value
-}
-$lists['Ranks README'] = $rootList
+# Ranks' own README: the bullets after "imports from". The unbold link to the importer repo sits
+# before it and the author credits are inline, so neither reads as a plugin.
+$lists['Ranks README'] = Bold-Links ([regex]::Match(
+  (Get-Content "$ranks\README.md" -Raw), '(?s)imports from.*?\n\s*\n').Value)
 
 $lists['importer README'] = Bold-Links ([regex]::Match(
   (Get-Content "$PSScriptRoot\..\README.md" -Raw), '(?s)## .{0,4} ?Works with.*?(?=\n## )').Value)

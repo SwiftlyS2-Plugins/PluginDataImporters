@@ -1,0 +1,237 @@
+name: Build and Release
+
+# One importer per run. They are versioned independently and released when the plugin they read
+# from changes, which has nothing to do with when the others change.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      importer:
+        description: Which importer to release
+        required: true
+        default: Ranks_Importer
+        type: choice
+        options:
+          - Ranks_Importer
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[release')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so `git describe` can find the previous tag for the compare link.
+          fetch-depth: 0
+
+      # A push says which importer in its message; a manual run picks one from the dropdown.
+      - name: Pick the importer
+        id: pick
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            IMPORTER="${{ github.event.inputs.importer }}"
+          else
+            IMPORTER=$(printf '%s' "${{ github.event.head_commit.message }}" \
+              | grep -oP '\[release[ \t]+\K[A-Za-z0-9_]+' | head -1 || true)
+          fi
+
+          if [ -z "$IMPORTER" ]; then
+            echo "::error::Commit message has [release] but no importer name. Use [release Ranks_Importer]."
+            exit 1
+          fi
+
+          if [ ! -f "$IMPORTER/$IMPORTER.csproj" ]; then
+            echo "::error::No such importer: $IMPORTER"
+            exit 1
+          fi
+
+          echo "importer=$IMPORTER" >> "$GITHUB_OUTPUT"
+          echo "Releasing $IMPORTER"
+
+      # The CHANGELOG is the source of truth; PluginMetadata only has to agree with it.
+      - name: Read version from CHANGELOG
+        id: version
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+
+          VERSION=$(grep -m1 -oP '^##[ \t]*\[v?\K[^]]+' "$IMPORTER/CHANGELOG.md" || true)
+
+          if [ -z "$VERSION" ]; then
+            echo "::error file=$IMPORTER/CHANGELOG.md::No '## [x.y.z]' section found, so there is nothing to release."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$IMPORTER-v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG says $VERSION"
+
+      - name: Verify PluginMetadata matches the CHANGELOG
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          DECLARED=$(sed -n 's/.*Version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$IMPORTER/src/$IMPORTER.cs" | head -1)
+
+          if [ -z "$DECLARED" ]; then
+            echo "::error file=$IMPORTER/src/$IMPORTER.cs::Could not read PluginMetadata.Version."
+            exit 1
+          fi
+
+          if [ "$DECLARED" != "$VERSION" ]; then
+            echo "::error file=$IMPORTER/src/$IMPORTER.cs::PluginMetadata.Version is $DECLARED but the newest CHANGELOG section is $VERSION. Bump whichever is behind."
+            exit 1
+          fi
+
+          echo "PluginMetadata.Version $DECLARED matches."
+
+      # The whole point of deps/ is that a build needs nothing but this repo.
+      - name: Verify the vendored contract is present
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+
+          if ! ls "$IMPORTER"/deps/*.Contract.dll >/dev/null 2>&1; then
+            echo "::error::$IMPORTER/deps holds no *.Contract.dll, so it cannot build without the provider's repo."
+            exit 1
+          fi
+
+          ls -l "$IMPORTER"/deps
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Add a new CHANGELOG section and bump PluginMetadata.Version."
+            exit 1
+          fi
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "\\[v?" ver "\\]") { found = 1; next }
+            }
+            found { print }
+          ' "$IMPORTER/CHANGELOG.md" > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "::error file=$IMPORTER/CHANGELOG.md::No '## [$VERSION]' section found."
+            exit 1
+          fi
+
+          # Only this importer's own tags: each is versioned independently.
+          PREV_TAG=$(git describe --tags --abbrev=0 --match "$IMPORTER-v*" 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+              "${{ github.repository }}" "$PREV_TAG" "${{ steps.version.outputs.tag }}" >> release-notes.md
+          fi
+
+          cat release-notes.md
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+          cache: true
+          cache-dependency-path: "**/*.csproj"
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+
+          dotnet restore "$IMPORTER/$IMPORTER.csproj"
+          dotnet publish "$IMPORTER/$IMPORTER.csproj" -c Release
+
+      # Shipping the provider's contract gives its interface a second type identity, and the
+      # shared-interface handshake then silently stops matching on a server where the target
+      # plugin is plainly running. That failure is invisible here, so the artifact is checked.
+      - name: Verify the contract is not shipped
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+
+          STOWAWAY=$(find "$IMPORTER/build/publish" -name '*.Contract.dll' -type f || true)
+
+          if [ -n "$STOWAWAY" ]; then
+            echo "::error::$IMPORTER publishes a contract assembly, which breaks the handshake:"
+            echo "$STOWAWAY"
+            echo "Set Private=false on the deps/ reference."
+            exit 1
+          fi
+
+          echo "No contract assembly in the publish output."
+
+      - name: Collect the zip
+        id: zip
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          ZIP="$IMPORTER/build/$IMPORTER-v$VERSION.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "::error::Expected $ZIP from the CreateZip target. Zips found:"
+            find . -name '*.zip' -type f || true
+            exit 1
+          fi
+
+          # Belt and braces: the publish check above looks at the directory, this at the artifact
+          # that actually reaches an operator.
+          if unzip -l "$ZIP" | grep -q '\.Contract\.dll'; then
+            echo "::error::$ZIP contains a contract assembly."
+            exit 1
+          fi
+
+          mkdir -p release-artifacts
+          cp "$ZIP" release-artifacts/
+
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          unzip -l "$ZIP"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IMPORTER="${{ steps.pick.outputs.importer }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          PRERELEASE=()
+          case "$VERSION" in
+            *-*) PRERELEASE=(--prerelease) ;;
+          esac
+
+          gh release create "$TAG" \
+            --title "$IMPORTER | v$VERSION" \
+            --notes-file release-notes.md \
+            --target "${{ github.sha }}" \
+            "${PRERELEASE[@]}" \
+            release-artifacts/*.zip
+
+          echo "Released $TAG"
