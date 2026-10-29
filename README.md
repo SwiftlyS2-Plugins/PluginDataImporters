@@ -4,6 +4,13 @@
   <p>Each importer runs once, then you delete it.</p>
 </div>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
+  <img src="https://img.shields.io/github/downloads/shmitzas/PluginDataImporters/total" alt="Downloads">
+  <img src="https://img.shields.io/github/stars/shmitzas/PluginDataImporters?style=flat&logo=github" alt="Stars">
+  <img src="https://img.shields.io/github/license/shmitzas/PluginDataImporters" alt="License">
+</p>
+
 ---
 
 > [!NOTE]
