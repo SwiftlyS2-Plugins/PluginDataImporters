@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
-  <img src="https://img.shields.io/github/downloads/shmitzas/PluginDataImporters/total" alt="Downloads">
+  <a href="https://github.com/shmitzas/PluginDataImporters/releases"><img src="https://img.shields.io/github/downloads/shmitzas/PluginDataImporters/total?style=flat&logo=github&cacheSeconds=3600" alt="Downloads"></a>
   <img src="https://img.shields.io/github/stars/shmitzas/PluginDataImporters?style=flat&logo=github" alt="Stars">
   <img src="https://img.shields.io/github/license/shmitzas/PluginDataImporters" alt="License">
 </p>
