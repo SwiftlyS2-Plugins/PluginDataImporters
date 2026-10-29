@@ -1,0 +1,13 @@
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\build\net10.0\Ranks_Importer.deps.json
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\build\net10.0\Ranks_Importer.dll
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\build\net10.0\Ranks_Importer.pdb
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.csproj.AssemblyReference.cache
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.GeneratedMSBuildEditorConfig.editorconfig
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.AssemblyInfoInputs.cache
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.AssemblyInfo.cs
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.csproj.CoreCompileInputs.cache
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.sourcelink.json
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.dll
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\refint\Ranks_Importer.dll
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\Ranks_Importer.pdb
+G:\Documents\GitHub\SwiftlyS2 Forks - Core Plugins\PluginDataImporters\Ranks_Importer\obj\Release\net10.0\ref\Ranks_Importer.dll
