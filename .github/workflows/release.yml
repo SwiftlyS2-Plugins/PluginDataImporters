@@ -228,7 +228,7 @@ jobs:
           esac
 
           gh release create "$TAG" \
-            --title "$IMPORTER | v$VERSION" \
+            --title "$TAG" \
             --notes-file release-notes.md \
             --target "${{ github.sha }}" \
             "${PRERELEASE[@]}" \
