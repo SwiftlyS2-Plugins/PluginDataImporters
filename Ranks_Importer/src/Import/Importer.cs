@@ -13,9 +13,15 @@ internal sealed record ImportReport(
     int SettingsWritten,
     int WeaponRowsWritten,
     int HitRowsWritten,
-    bool WeaponStatsSkipped);
+    bool WeaponStatsSkipped,
+    bool PlaytimeSkipped);
 
-internal sealed record TargetTables(string Players, string Settings, string? WeaponStats, string? HitStats);
+/// <param name="Playtime">Whether the players table has the <c>playtime</c> column, which Ranks before 1.3.0 lacks.</param>
+internal sealed record TargetTables(string Players, string Settings, string? WeaponStats, string? HitStats, bool Playtime);
+
+/// <param name="PlayersWithPlaytime">Source players holding any playtime — the only ones a playtime-only run touches.</param>
+/// <param name="PlayersUpdated">Of those, how many Ranks already held and therefore received it.</param>
+internal sealed record PlaytimeReport(string SourceName, int PlayersWithPlaytime, int PlayersUpdated, int PlayersRejected);
 
 /// <summary>Writes whatever a <see cref="ISource"/> read into Ranks' own tables.</summary>
 /// <remarks>
@@ -76,12 +82,12 @@ internal sealed class Importer
         if (!commit)
         {
             return new ImportReport(source.Name, players.Count, 0, rejected, preferences.Count,
-                weapons.Count, hits.Count, weaponStatsSkipped);
+                weapons.Count, hits.Count, weaponStatsSkipped, !targets.Playtime);
         }
 
         using var transaction = destination.BeginTransaction();
 
-        var written = WritePlayers(destination, transaction, targets.Players, players);
+        var written = WritePlayers(destination, transaction, targets.Players, players, targets.Playtime);
         var settings = WriteSettings(destination, transaction, targets.Settings, players, preferences);
 
         var weaponRows = weaponStatsSkipped ? 0 : WriteWeapons(destination, transaction, targets.WeaponStats!, weapons);
@@ -90,7 +96,41 @@ internal sealed class Importer
         transaction.Commit();
 
         return new ImportReport(source.Name, players.Count, written, rejected, settings,
-            weaponRows, hitRows, weaponStatsSkipped);
+            weaponRows, hitRows, weaponStatsSkipped, !targets.Playtime);
+    }
+
+    /// <summary>Adds each source player's playtime to the row Ranks already holds for them, and writes nothing else.</summary>
+    /// <remarks>
+    /// Added, not replaced: Ranks has been counting since its own update, so the old plugin's total is
+    /// the time before it. A player Ranks does not hold is skipped — a row holding nothing but playtime
+    /// would rank someone who never played under Ranks.
+    /// </remarks>
+    public PlaytimeReport RunPlaytime(IDbConnection sourceConnection, IDbConnection destination, ISource source, string table, bool commit)
+    {
+        var players = source.ReadPlayers(sourceConnection, out var rejected).Where(p => p.Playtime > 0).ToList();
+
+        if (!commit) return new PlaytimeReport(source.Name, players.Count, 0, rejected);
+
+        var t = _sql.Quote(table);
+        var column = _sql.Quote("playtime");
+        var updated = 0;
+
+        using var transaction = destination.BeginTransaction();
+
+        foreach (var p in players)
+        {
+            using var update = Db.Command(destination, transaction,
+                $"UPDATE {t} SET {column} = {column} + @playtime WHERE {_sql.Quote("steam_id")} = @id");
+
+            Db.Bind(update, "@playtime", p.Playtime);
+            Db.Bind(update, "@id", (long)p.SteamId);
+
+            if (update.ExecuteNonQuery() > 0) updated++;
+        }
+
+        transaction.Commit();
+
+        return new PlaytimeReport(source.Name, players.Count, updated, rejected);
     }
 
     private string Columns(params string[] names) => string.Join(", ", names.Select(_sql.Quote));
@@ -98,11 +138,18 @@ internal sealed class Importer
     /// <remarks>
     /// UPDATE-then-INSERT rather than an upsert: the three engines spell that three different ways,
     /// and a one-shot import has no throughput problem worth a dialect switch for.
+    ///
+    /// <c>playtime</c> is named only when the destination has it, so an older Ranks still gets
+    /// everything else instead of a rolled-back import.
     /// </remarks>
-    private int WritePlayers(IDbConnection connection, IDbTransaction transaction, string table, List<PlayerRow> players)
+    private int WritePlayers(IDbConnection connection, IDbTransaction transaction, string table, List<PlayerRow> players, bool playtime)
     {
         var t = _sql.Quote(table);
         var written = 0;
+
+        var setPlaytime = playtime ? $", {_sql.Quote("playtime")} = @playtime" : string.Empty;
+        var insertPlaytime = playtime ? $", {_sql.Quote("playtime")}" : string.Empty;
+        var valuePlaytime = playtime ? ", @playtime" : string.Empty;
 
         foreach (var p in players)
         {
@@ -113,9 +160,9 @@ internal sealed class Importer
                 $"{_sql.Quote("match_wins")} = @mw, {_sql.Quote("match_losses")} = @ml, " +
                 $"{_sql.Quote("bombs_planted")} = @bp, {_sql.Quote("bombs_defused")} = @bd, " +
                 $"{_sql.Quote("headshots")} = @hs, {_sql.Quote("hits")} = @hits, {_sql.Quote("misses")} = @misses, " +
-                $"{_sql.Quote("last_seen")} = @seen WHERE {_sql.Quote("steam_id")} = @id"))
+                $"{_sql.Quote("last_seen")} = @seen{setPlaytime} WHERE {_sql.Quote("steam_id")} = @id"))
             {
-                Bind(update, p);
+                Bind(update, p, playtime);
 
                 if (update.ExecuteNonQuery() > 0)
                 {
@@ -127,11 +174,11 @@ internal sealed class Importer
             using var insert = Db.Command(connection, transaction, $"INSERT INTO {t} (" +
                 Columns("steam_id", "name", "points", "kills", "deaths", "assists", "round_wins",
                     "round_losses", "match_wins", "match_losses", "bombs_planted", "bombs_defused",
-                    "headshots", "hits", "misses", "first_seen", "last_seen") +
+                    "headshots", "hits", "misses", "first_seen", "last_seen") + insertPlaytime +
                 ") VALUES (@id, @name, @points, @kills, @deaths, @assists, @rw, @rl, " +
-                "@mw, @ml, @bp, @bd, @hs, @hits, @misses, @seen, @seen)");
+                $"@mw, @ml, @bp, @bd, @hs, @hits, @misses, @seen, @seen{valuePlaytime})");
 
-            Bind(insert, p);
+            Bind(insert, p, playtime);
             insert.ExecuteNonQuery();
 
             written++;
@@ -140,7 +187,8 @@ internal sealed class Importer
         return written;
     }
 
-    private static void Bind(IDbCommand command, PlayerRow p)
+    /// <remarks>Binds <c>@playtime</c> only when the statement names it: a parameter the SQL never mentions is not portable.</remarks>
+    private static void Bind(IDbCommand command, PlayerRow p, bool playtime)
     {
         Db.Bind(command, "@id", (long)p.SteamId);
         Db.Bind(command, "@name", p.Name);
@@ -158,6 +206,8 @@ internal sealed class Importer
         Db.Bind(command, "@hits", p.Hits);
         Db.Bind(command, "@misses", p.Misses);
         Db.Bind(command, "@seen", p.LastSeen);
+
+        if (playtime) Db.Bind(command, "@playtime", p.Playtime);
     }
 
     /// <remarks>

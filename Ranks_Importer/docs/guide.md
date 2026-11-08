@@ -1,6 +1,6 @@
 # Ranks_Importer
 
-Brings your players over from another ranking plugin — points, stats and per-weapon history — in one step.
+Brings your players over from another ranking plugin — points, stats, playtime and per-weapon history — in one step.
 
 **Kind: one-shot tool** — not a module you keep. It runs once, records that it ran, and is then safe to delete. It awards no points and adds no commands.
 
@@ -15,8 +15,8 @@ It only ever *reads* the old plugin's tables. Nothing you do here can damage the
 | [LVL Ranks](https://github.com/Pisex/cs2-lvl_ranks) | Pisex's original, plus its [modules](https://github.com/Pisex/cs2-lvl_ranks_modules). A narrower schema than K4's — see below |
 | [K4-LevelRanks-SwiftlyS2](https://github.com/K4ryuu/K4-LevelRanks-SwiftlyS2) | K4ryuu's take on it, archived May 2026. Stores Steam ids as `STEAM_1:…` |
 | [K4-LevelRanks-Upkeep](https://github.com/shmitzas/K4-LevelRanks-Upkeep) | The maintained fork. Converted its Steam ids to SteamID64 |
-| [K4-System](https://github.com/karola3vax/K4-System) | A separate schema — reads `k4ranks` and `k4stats` |
-| [K4-Zenith](https://github.com/K4ryuu/K4-Zenith) | Reads the **Ranks** and **Stats** modules out of `zenith_player_storage`, plus `zenith_weapon_stats` |
+| [K4-System](https://github.com/karola3vax/K4-System) | A separate schema — reads `k4ranks`, `k4stats` and `k4times` |
+| [K4-Zenith](https://github.com/K4ryuu/K4-Zenith) | Reads the **Ranks**, **Stats** and **TimeStats** modules out of `zenith_player_storage`, plus `zenith_weapon_stats` |
 
 All three LVL Ranks plugins write `lvl_base`, so the importer cannot tell them apart by table name. It probes the columns instead, and the report names what it found. Both Steam id forms are accepted.
 
@@ -39,15 +39,15 @@ Pisex also has no `game_wins` / `game_losses`, so match records start at 0; K4 a
 
 ### K4-Zenith modules
 
-Zenith keeps each module's data as a JSON column on one shared player row, created the first time that module loads. Only two of them hold anything Ranks can store:
+Zenith keeps each module's data as a JSON column on one shared player row, created the first time that module loads. Three of them hold something Ranks can store:
 
 | Module | What happens |
 |--------|--------------|
 | K4-Zenith-Ranks | Points. Missing column means the module never ran, and everyone imports at 0 — logged as a warning |
 | K4-Zenith-Stats | Every statistic, including per-hitbox hits and `zenith_weapon_stats` |
-| K4-Zenith-TimeStats | Skipped. Ranks does not track playtime |
+| K4-Zenith-TimeStats | Playtime — `TotalPlaytime`, which Zenith keeps in minutes, arrives as seconds. Missing column means everyone imports with 0 playtime — logged as a warning |
 | K4-Zenith-Bans | Skipped. Ranks stores no punishments |
-| K4-Zenith-Toplists | Nothing to import — it derives everything from the two above |
+| K4-Zenith-Toplists | Nothing to import — it derives everything from the modules above |
 
 Zenith has no table prefix of its own, so leave `Source.Prefix` and `Source.Suffix` empty for it.
 
@@ -78,6 +78,25 @@ The import is all-or-nothing. A failure partway writes nothing rather than leavi
 
 ---
 
+## Already switched to Ranks?
+
+Ranks counts playtime from 1.3.0 on. A server that switched before then — by hand, or with Ranks_Importer 1.0.0 — still has everyone's old playtime in the old plugin's tables, and a normal import refuses to run over the players Ranks already holds.
+
+`PlaytimeOnly` adds that old playtime to the players Ranks holds and changes nothing else: no points, no statistics, no names.
+
+1. Update Ranks to 1.3.0 or later.
+2. Set `PlaytimeOnly` to `true`, leave `Confirm` at `false`, and restart. The console says how many players have playtime to bring.
+3. Set `Confirm` to `true`, restart, then delete the plugin folder.
+
+- **It adds rather than replaces**, so the time Ranks has counted since you updated is kept.
+- **Players Ranks does not hold are left out.** They never joined since the switch; the console says how many.
+- **It runs once.** The run is recorded in `ranks_import_log`, and a second run would double everyone's playtime — so do not empty that table to repeat it.
+- **With seasons on, the old playtime counts towards the current season** as well as all time, since that is the row it is added to.
+
+A full import made with Ranks_Importer 1.1.0 or later into Ranks 1.3.0 or later already brought playtime, so `PlaytimeOnly` refuses to run after one.
+
+---
+
 ## Configuration
 
 `addons/swiftlys2/plugins/Ranks_Importer/config.jsonc`
@@ -87,6 +106,7 @@ The import is all-or-nothing. A failure partway writes nothing rather than leavi
   "Importer": {
     "Confirm": false,
     "Overwrite": false,
+    "PlaytimeOnly": false,
     "Database": {
       "Source": "",
       "Destination": ""
@@ -108,6 +128,7 @@ The import is all-or-nothing. A failure partway writes nothing rather than leavi
 |---------|---------|-------------|
 | `Confirm` | `false` | Nothing is written while this is false. The report comes first |
 | `Overwrite` | `false` | Allow the import when core already holds players. Off so it cannot overwrite a live ladder by accident |
+| `PlaytimeOnly` | `false` | Add only the old playtime to the players core already holds — see [Already switched to Ranks?](#already-switched-to-ranks). A first import brings playtime anyway |
 | `Database.Source` | `""` | `database.jsonc` entry holding the **old** plugin's tables, e.g. `ranks_old`. Empty means the same database Ranks uses |
 | `Database.Destination` | `""` | `database.jsonc` entry Ranks itself writes to, e.g. `ranks_new`. Empty means whatever Ranks reports, which is almost always what you want |
 | `Source.Kind` | `auto` | `auto`, `levelranks`, `k4system` or `zenith`. Set it only when a server ran two of them and auto picked the wrong one. `levelranks` covers all three LVL Ranks plugins |
@@ -137,6 +158,7 @@ the players you import will not show up in game.
 |---|---|
 | Points, kills, deaths, assists, headshots | exact |
 | Round wins and losses, match wins and losses | exact |
+| Playtime | exact, in seconds. Needs Ranks 1.3.0 or later |
 | Player name and last-seen time | exact |
 
 | Plugin-specific | |
@@ -155,9 +177,9 @@ the players you import will not show up in game.
 | Thing | Reason |
 |-------|--------|
 | Rank name | Derived from points by your ladder — see above |
-| Playtime | Core does not track it |
 | Missions, rewards, streaks (K4-System) | Core has no equivalent |
-| Bans, toplists, playtime modules (K4-Zenith) | Core has no equivalent |
+| Bans and toplists (K4-Zenith) | Core has no equivalent |
+| Playtime by team and alive or dead (K4-System) | Ranks keeps one total — `k4times.all`, which does transfer |
 | Per-weapon history (K4-System) | K4-System never recorded it |
 | Chat point-message setting (K4-System, K4-Zenith) | Neither has such a setting; core's default applies |
 | Bomb plants and defuses (LVL Ranks) | No LVL Ranks plugin records them; both start at 0 |
@@ -165,7 +187,7 @@ the players you import will not show up in game.
 | Per-hitbox damage (LVL Ranks) | `DmgHealth` is one whole-player total, so it is filed under hitgroup 0 (**Generic**) — `SUM(damage)` is correct, but the per-hitbox split is not recoverable |
 | Armour damage (LVL Ranks) | `DmgArmor` has no column — Ranks counts health damage only |
 | All damage (K4-System, K4-Zenith) | Neither plugin records damage anywhere; it starts at 0 |
-| Playtime | Ranks has no playtime column |
+| Playtime, into Ranks before 1.3.0 | It has no playtime column. Update Ranks, then run with `PlaytimeOnly` |
 | Per-map and GeoIP statistics | Ranks stores neither |
 | Head hits (K4-System) | It counted headshot *kills*, not head hits. The kills transfer |
 
@@ -192,6 +214,7 @@ For checking a result that looks wrong. `docs/verify-mapping.ps1` validates ever
 | `lvl_base.hits` | `hits` |
 | `lvl_base.shoots` minus `hits` | `misses` |
 | `lvl_base.lastconnect` | `first_seen` and `last_seen` |
+| `lvl_base.playtime` | `playtime` — seconds in both |
 | `lvl_base_settings.messages` | `show_point_messages` |
 | `lvl_base_weapons` | `ranks_weapon_stats` |
 | `lvl_base_hits` | `ranks_hit_stats`, one row per body part |
@@ -211,6 +234,7 @@ For checking a result that looks wrong. `docs/verify-mapping.ps1` validates ever
 | `k4stats.game_win` / `game_lose` | `match_wins` / `match_losses` |
 | `k4stats.bomb_planted` / `bomb_defused` | `bombs_planted` / `bombs_defused` |
 | `k4stats.chest_hits` … `special_hits` | `ranks_hit_stats`, one row per body part |
+| `k4times.all` | `playtime` — seconds in both |
 
 ---
 
@@ -219,8 +243,10 @@ For checking a result that looks wrong. `docs/verify-mapping.ps1` validates ever
 | Symptom | Cause |
 |---------|-------|
 | *"found no old ranking tables"* | The old tables use a prefix — set `Source.Prefix`. Or core is pointed at a different database than the old plugin used |
-| *"already holds N player(s)"* | Core is already in use. Set `Overwrite` only to merge deliberately |
-| *"already been imported"* | It ran before. Empty `ranks_import_log` to run it again |
+| *"already holds N player(s)"* | Core is already in use. Set `Overwrite` only to merge deliberately, or `PlaytimeOnly` to add just the old playtime |
+| *"already been imported"* | It ran before. Empty `ranks_import_log` to run it again — but never to repeat a `PlaytimeOnly` run, which would add the playtime twice |
+| *"no playtime column"* | Ranks is older than 1.3.0. Update it, then run with `PlaytimeOnly` |
+| *"0 playtime"* (K4-Zenith) | K4-Zenith-TimeStats never ran, so there is no playtime to bring |
 | *"Ranks_WeaponStats is not installed"* | Per-weapon and hitbox history was skipped. Install it, empty `ranks_import_log`, restart |
 | It read the wrong plugin | The server ran two. Set `Source.Kind` |
 | Every rank changed | Expected. Tune [Rank Ladder](https://github.com/shmitzas/Ranks/wiki/Rank-Ladder), not the import |

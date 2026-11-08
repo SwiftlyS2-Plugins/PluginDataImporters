@@ -15,6 +15,9 @@ public sealed class ImporterConfig
     [Description("Allow importing when Ranks already has players. Off by default so an import cannot overwrite a live ladder by accident.")]
     public bool Overwrite { get; set; } = false;
 
+    [Description("Import only playtime, adding it to the players Ranks already holds and changing nothing else. For a server that switched to Ranks before 1.3.0, when Ranks did not track playtime. Leave false for a first import, which brings playtime anyway.")]
+    public bool PlaytimeOnly { get; set; } = false;
+
     [Description("Which database.jsonc connections to read from and write to.")]
     public DatabaseOptions Database { get; set; } = new();
 

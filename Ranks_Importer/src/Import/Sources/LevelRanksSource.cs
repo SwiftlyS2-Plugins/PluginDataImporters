@@ -39,10 +39,11 @@ internal sealed class LevelRanksSource(SqlDialect sql, SourceOptions options, IL
         _name = hasMatches ? "K4-LevelRanks" : "LVL Ranks (Pisex)";
 
         // "shoots" here, "shots" in the weapons table — the schema spells the same idea two ways.
+        // playtime is seconds in every one of them, the unit Ranks stores.
         List<string> columns =
         [
             "steam", "name", "value", "kills", "deaths", "assists", "round_win", "round_lose",
-            "headshots", "hits", "shoots", "lastconnect",
+            "headshots", "hits", "shoots", "lastconnect", "playtime",
         ];
 
         if (hasMatches) columns.AddRange(["game_wins", "game_losses"]);
@@ -69,15 +70,16 @@ internal sealed class LevelRanksSource(SqlDialect sql, SourceOptions options, IL
                 Db.GetInt32(reader, 5),
                 Db.GetInt32(reader, 6),
                 Db.GetInt32(reader, 7),
-                hasMatches ? Db.GetInt32(reader, 12) : 0,
                 hasMatches ? Db.GetInt32(reader, 13) : 0,
+                hasMatches ? Db.GetInt32(reader, 14) : 0,
                 // No LVL Ranks plugin records bomb objectives against a player.
                 0,
                 0,
                 Db.GetInt32(reader, 8),
                 Clamp(hits),
                 MissesFrom(Db.GetInt64(reader, 10), hits),
-                FromUnixSeconds(Db.GetInt64(reader, 11))));
+                FromUnixSeconds(Db.GetInt64(reader, 11)),
+                Math.Max(0, Db.GetInt64(reader, 12))));
         }
 
         rejected = bad;

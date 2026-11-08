@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Ranks.Importer.Config;
@@ -10,7 +11,7 @@ namespace Ranks.Importer.Import.Sources;
 /// Zenith keeps almost nothing in ordinary columns. Every module writes a <c>{module}.storage</c>
 /// JSON blob onto <c>zenith_player_storage</c>, and that column is created by ALTER TABLE the first
 /// time the module loads — so a server that never ran K4-Zenith-Stats has no such column at all.
-/// Both are probed rather than assumed, and either may be absent.
+/// The Ranks, Stats and TimeStats columns are each probed rather than assumed, and any may be absent.
 ///
 /// The JSON is parsed here rather than with JSON_EXTRACT: a JSON column reads back as text on every
 /// engine, which keeps this source free of the dialect split that function would force.
@@ -21,6 +22,9 @@ internal sealed class K4ZenithSource(SqlDialect sql, SourceOptions options, ILog
     // Zenith names these after the module assembly, so they carry a dash and a dot and must be quoted.
     private const string RanksColumn = "K4-Zenith-Ranks.storage";
     private const string StatsColumn = "K4-Zenith-Stats.storage";
+    private const string TimeStatsColumn = "K4-Zenith-TimeStats.storage";
+
+    private const int SecondsPerMinute = 60;
 
     public string Name => "K4-Zenith";
 
@@ -36,6 +40,7 @@ internal sealed class K4ZenithSource(SqlDialect sql, SourceOptions options, ILog
 
         var hasRanks = HasColumn(connection, RanksColumn);
         var hasStats = HasColumn(connection, StatsColumn);
+        var hasTime = HasColumn(connection, TimeStatsColumn);
 
         if (!hasRanks)
         {
@@ -51,9 +56,17 @@ internal sealed class K4ZenithSource(SqlDialect sql, SourceOptions options, ILog
                 "That column only exists once K4-Zenith-Stats has run.", StorageTable, StatsColumn);
         }
 
+        if (!hasTime)
+        {
+            logger.LogWarning(
+                "Ranks_Importer: {Table} has no '{Column}' column, so every player will import with 0 playtime. " +
+                "That column only exists once K4-Zenith-TimeStats has run.", StorageTable, TimeStatsColumn);
+        }
+
         var columns = new List<string> { "steam_id", "name", "last_online" };
         if (hasRanks) columns.Add(RanksColumn);
         if (hasStats) columns.Add(StatsColumn);
+        if (hasTime) columns.Add(TimeStatsColumn);
 
         using var command = Select(connection, StorageTable, [.. columns]);
         using var reader = command.ExecuteReader();
@@ -68,6 +81,9 @@ internal sealed class K4ZenithSource(SqlDialect sql, SourceOptions options, ILog
 
             var points = hasRanks ? (int)Number(Parse(Db.GetString(reader, 3)), "Points") : 0;
             var stats = hasStats ? Parse(Db.GetString(reader, hasRanks ? 4 : 3)) : null;
+
+            // Appended last, so it is always the final column when present.
+            var time = hasTime ? Parse(Db.GetString(reader, columns.Count - 1)) : null;
 
             var hits = (int)Number(stats, "HitsGiven");
 
@@ -87,7 +103,8 @@ internal sealed class K4ZenithSource(SqlDialect sql, SourceOptions options, ILog
                 (int)Number(stats, "Headshots"),
                 hits,
                 MissesFrom(Number(stats, "Shoots"), hits),
-                ReadDateTime(reader, 2)));
+                ReadDateTime(reader, 2),
+                (long)Math.Round(Minutes(time, "TotalPlaytime") * SecondsPerMinute)));
         }
 
         rejected = bad;
@@ -206,5 +223,25 @@ internal sealed class K4ZenithSource(SqlDialect sql, SourceOptions options, ILog
             JsonValueKind.String => long.TryParse(value.GetString(), out var s) ? s : 0,
             _ => 0,
         };
+    }
+
+    /// <remarks>
+    /// K4-Zenith-TimeStats keeps minutes as a fraction rounded to two places, so the value is read
+    /// whole rather than through <see cref="Number"/>, which would drop up to a minute per player.
+    /// Negative values are corruption, not time, and read as 0.
+    /// </remarks>
+    private static double Minutes(JsonElement? storage, string key)
+    {
+        if (storage is not { ValueKind: JsonValueKind.Object } element) return 0;
+        if (!element.TryGetProperty(key, out var value)) return 0;
+
+        var minutes = value.ValueKind switch
+        {
+            JsonValueKind.Number => value.GetDouble(),
+            JsonValueKind.String => double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var s) ? s : 0,
+            _ => 0,
+        };
+
+        return double.IsFinite(minutes) ? Math.Max(0, minutes) : 0;
     }
 }

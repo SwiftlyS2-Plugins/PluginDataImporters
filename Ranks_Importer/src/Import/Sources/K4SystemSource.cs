@@ -3,7 +3,7 @@ using Ranks.Importer.Config;
 
 namespace Ranks.Importer.Import.Sources;
 
-/// <summary>K4-System's own schema: <c>k4ranks</c> for points, <c>k4stats</c> for everything else.</summary>
+/// <summary>K4-System's own schema: <c>k4ranks</c> for points, <c>k4stats</c> for statistics, <c>k4times</c> for playtime.</summary>
 /// <remarks>
 /// Unrelated to the LVL Ranks tables despite the shared author lineage. Steam ids are SteamID64
 /// stored as text, and <c>lastseen</c> is a real DATETIME rather than a unix stamp.
@@ -18,17 +18,19 @@ internal sealed class K4SystemSource(SqlDialect sql, SourceOptions options) : So
 
     private string RanksTable => $"{options.Prefix}k4ranks{options.Suffix}";
     private string StatsTable => $"{options.Prefix}k4stats{options.Suffix}";
+    private string TimesTable => $"{options.Prefix}k4times{options.Suffix}";
 
     public bool IsPresent(IDbConnection connection) => Db.TableReadable(connection, Sql.Quote(RanksTable));
 
     /// <remarks>
-    /// Two tables, joined in memory rather than in SQL: the stats row is optional (K4-System lets
+    /// Three tables, joined in memory rather than in SQL: the stats row is optional (K4-System lets
     /// an operator turn the stat module off), and a LEFT JOIN spelled for three engines buys
     /// nothing a dictionary lookup does not.
     /// </remarks>
     public List<PlayerRow> ReadPlayers(IDbConnection connection, out int rejected)
     {
         var stats = ReadStats(connection);
+        var times = ReadTimes(connection);
         var rows = new List<PlayerRow>();
         var bad = 0;
 
@@ -61,7 +63,8 @@ internal sealed class K4SystemSource(SqlDialect sql, SourceOptions options) : So
                 s.Headshots,
                 s.Hits,
                 MissesFrom(s.Shots, s.Hits),
-                ReadDateTime(reader, 3)));
+                ReadDateTime(reader, 3),
+                times.GetValueOrDefault(steamId)));
         }
 
         rejected = bad;
@@ -143,6 +146,26 @@ internal sealed class K4SystemSource(SqlDialect sql, SourceOptions options) : So
                 Db.GetInt32(reader, 11),
                 Db.GetInt32(reader, 12));
         }
+
+        return map;
+    }
+
+    /// <remarks>
+    /// <c>all</c> is every second connected, whatever the team — the figure Ranks keeps; the other
+    /// five only split it. Missing like the stats table, it leaves playtime at 0 rather than failing.
+    /// </remarks>
+    private Dictionary<ulong, long> ReadTimes(IDbConnection connection)
+    {
+        var map = new Dictionary<ulong, long>();
+
+        if (!Db.TableReadable(connection, Sql.Quote(TimesTable))) return map;
+
+        using var command = Select(connection, TimesTable, "steam_id", "all");
+        using var reader = command.ExecuteReader();
+
+        while (reader.Read())
+            if (SteamIds.TryParse(Db.GetString(reader, 0), out var steamId))
+                map[steamId] = Math.Max(0, Db.GetInt64(reader, 1));
 
         return map;
     }

@@ -11,13 +11,18 @@ namespace Ranks.Importer;
 
 [PluginMetadata(
     Id = "Ranks_Importer",
-    Version = "1.0.0",
+    Version = "1.1.0",
     Name = "Ranks Importer",
     Author = "Shmitzas",
     Description = "One-shot import of K4-LevelRanks data into Ranks.")]
 public sealed class RanksImporter : BasePlugin
 {
     private const string MarkerTable = "ranks_import_log";
+
+    /// <remarks>Appended to the marker's <c>source</c>, so a later playtime-only run can tell playtime already arrived.</remarks>
+    private const string WithPlaytime = "(with playtime)";
+
+    private const string PlaytimeOnly = "(playtime only)";
 
     private ILogger _logger = null!;
     private ImporterConfig _config = null!;
@@ -253,11 +258,12 @@ public sealed class RanksImporter : BasePlugin
     {
         EnsureMarkerTable(destination, sql, markerTable);
 
-        if (Db.Scalar(destination, $"SELECT COUNT(*) FROM {sql.Quote(markerTable)}") > 0)
+        if (AlreadyRan(destination, sql, markerTable))
         {
             _logger.LogInformation(
-                "Ranks_Importer: this database has already been imported, so nothing was done. " +
-                "Delete the plugin, or clear {Table} to run it again.", markerTable);
+                "Ranks_Importer: this database has already been imported{Playtime}, so nothing was done. " +
+                "Delete the plugin, or clear {Table} to run it again.",
+                _config.PlaytimeOnly ? " with playtime" : string.Empty, markerTable);
 
             return;
         }
@@ -276,12 +282,22 @@ public sealed class RanksImporter : BasePlugin
             return;
         }
 
+        // Ranks before 1.3.0 has no playtime column; naming it there would roll back the whole import.
+        var playtime = Db.ColumnReadable(destination, sql.Quote(playersTable), sql.Quote("playtime"));
+
+        if (_config.PlaytimeOnly)
+        {
+            RunPlaytimeImport(connection, destination, sql, source, playersTable, markerTable, playtime);
+            return;
+        }
+
         var existing = Db.Scalar(destination, $"SELECT COUNT(*) FROM {sql.Quote(playersTable)}");
         if (existing > 0 && !_config.Overwrite)
         {
             _logger.LogWarning(
                 "Ranks_Importer: {Table} already holds {Count} player(s), so nothing was written. " +
-                "Set Importer.Overwrite to true only if you mean to merge the old data into them.",
+                "Set Importer.Overwrite to true only if you mean to merge the old data into them, or " +
+                "Importer.PlaytimeOnly to add just the old playtime to them.",
                 playersTable, existing);
 
             return;
@@ -292,7 +308,7 @@ public sealed class RanksImporter : BasePlugin
         var weapons = _bridge.ResolveTable("ranks_weapon_stats") is { } w && Db.TableReadable(destination, sql.Quote(w)) ? w : null;
         var hits = _bridge.ResolveTable("ranks_hit_stats") is { } h && Db.TableReadable(destination, sql.Quote(h)) ? h : null;
 
-        var targets = new TargetTables(playersTable, settingsTable, weapons, hits);
+        var targets = new TargetTables(playersTable, settingsTable, weapons, hits, playtime);
         var importer = new Import.Importer(sql, _logger);
 
         var report = importer.Run(connection, destination, source, targets, commit: _config.Confirm);
@@ -301,18 +317,21 @@ public sealed class RanksImporter : BasePlugin
         {
             _logger.LogWarning(
                 "Ranks_Importer: DRY RUN — nothing was written. Found {Players} player(s) in {Source}" +
-                "{Rejected}{Weapons}. Set Importer.Confirm to true and restart to import them into {Target}.",
+                "{Rejected}{Weapons}{Playtime}. Set Importer.Confirm to true and restart to import them into {Target}.",
                 report.PlayersRead, report.SourceName,
                 report.PlayersRejected > 0
                     ? $", skipping {report.PlayersRejected} row(s) whose SteamID could not be read"
                     : string.Empty,
                 report.WeaponStatsSkipped ? ", and Ranks_WeaponStats is not installed so per-weapon history will be left behind" : string.Empty,
+                report.PlaytimeSkipped ? ", and this Ranks has no playtime column so playtime will be left behind until you update it to 1.3.0 or later" : string.Empty,
                 playersTable);
 
             return;
         }
 
-        RecordRun(destination, sql, markerTable, report);
+        RecordRun(destination, sql, markerTable,
+            report.PlaytimeSkipped ? report.SourceName : $"{report.SourceName} {WithPlaytime}",
+            report.PlayersWritten, report.WeaponRowsWritten, report.HitRowsWritten);
 
         _logger.LogInformation(
             "Ranks_Importer: imported {Written} player(s) and {Settings} setting row(s) from {Source}. " +
@@ -325,6 +344,57 @@ public sealed class RanksImporter : BasePlugin
             _logger.LogWarning(
                 "Ranks_Importer: Ranks_WeaponStats is not installed, so per-weapon and per-hitbox history was NOT imported. " +
                 "Install it, clear {Table}, and run this again if you want that history.", markerTable);
+
+        if (report.PlaytimeSkipped)
+            _logger.LogWarning(
+                "Ranks_Importer: this Ranks has no playtime column, so playtime was NOT imported. " +
+                "Update Ranks to 1.3.0 or later, then set Importer.PlaytimeOnly to true and restart to add it.");
+    }
+
+    /// <summary>Adds the old plugin's playtime to the players Ranks already holds, and nothing else.</summary>
+    private void RunPlaytimeImport(
+        IDbConnection connection, IDbConnection destination, Import.SqlDialect sql, ISource source,
+        string playersTable, string markerTable, bool hasColumn)
+    {
+        if (!hasColumn)
+        {
+            _logger.LogWarning(
+                "Ranks_Importer: {Table} has no playtime column, so there is nowhere to put playtime. Update Ranks to 1.3.0 or later.",
+                playersTable);
+
+            return;
+        }
+
+        var report = new Import.Importer(sql, _logger).RunPlaytime(connection, destination, source, playersTable, commit: _config.Confirm);
+
+        if (!_config.Confirm)
+        {
+            _logger.LogWarning(
+                "Ranks_Importer: DRY RUN — nothing was written. Found playtime for {Players} player(s) in {Source}. " +
+                "Set Importer.Confirm to true and restart to add it to the players {Target} already holds.",
+                report.PlayersWithPlaytime, report.SourceName, playersTable);
+
+            return;
+        }
+
+        RecordRun(destination, sql, markerTable, $"{report.SourceName} {PlaytimeOnly}", report.PlayersUpdated, 0, 0);
+
+        _logger.LogInformation(
+            "Ranks_Importer: added playtime to {Updated} player(s) from {Source}. {Missing} had none in Ranks and were left out. " +
+            "Nothing else was changed, and the old tables were only read — you can safely delete this plugin now.",
+            report.PlayersUpdated, report.SourceName, report.PlayersWithPlaytime - report.PlayersUpdated);
+    }
+
+    /// <remarks>
+    /// A playtime-only run is stopped only by an earlier run that carried playtime: an import from
+    /// before 1.1.0 left none, which is the case that mode exists for, while adding it a second time
+    /// would double everyone's figure. A full import is stopped by any earlier run.
+    /// </remarks>
+    private bool AlreadyRan(IDbConnection destination, Import.SqlDialect sql, string markerTable)
+    {
+        var filter = _config.PlaytimeOnly ? $" WHERE {sql.Quote("source")} LIKE '%playtime%'" : string.Empty;
+
+        return Db.Scalar(destination, $"SELECT COUNT(*) FROM {sql.Quote(markerTable)}{filter}") > 0;
     }
 
     /// <remarks>
@@ -342,7 +412,9 @@ public sealed class RanksImporter : BasePlugin
         command.ExecuteNonQuery();
     }
 
-    private void RecordRun(System.Data.IDbConnection connection, Import.SqlDialect sql, string table, ImportReport report)
+    private void RecordRun(
+        System.Data.IDbConnection connection, Import.SqlDialect sql, string table,
+        string source, int players, int weaponRows, int hitRows)
     {
         using var command = Db.Command(connection, null,
             $"INSERT INTO {sql.Quote(table)} (" +
@@ -350,11 +422,11 @@ public sealed class RanksImporter : BasePlugin
             $"{sql.Quote("weapon_rows")}, {sql.Quote("hit_rows")}) " +
             "VALUES (@source, @at, @players, @weapons, @hits)");
 
-        Db.Bind(command, "@source", report.SourceName);
+        Db.Bind(command, "@source", source);
         Db.Bind(command, "@at", DateTime.UtcNow.ToString("O"));
-        Db.Bind(command, "@players", report.PlayersWritten);
-        Db.Bind(command, "@weapons", report.WeaponRowsWritten);
-        Db.Bind(command, "@hits", report.HitRowsWritten);
+        Db.Bind(command, "@players", players);
+        Db.Bind(command, "@weapons", weaponRows);
+        Db.Bind(command, "@hits", hitRows);
 
         command.ExecuteNonQuery();
     }

@@ -62,12 +62,15 @@ internal static class Db
     /// K4-Zenith adds a column per module by ALTER TABLE the first time that module loads, so a
     /// server that never ran one simply has no such column. Probing beats information_schema for
     /// the same reason <see cref="TableReadable"/> does.
+    ///
+    /// Qualified with its table: SQLite reads a double-quoted name that matches no column as a
+    /// string literal, so a bare <c>SELECT "missing"</c> succeeds and the column probes as present.
     /// </remarks>
     public static bool ColumnReadable(IDbConnection connection, string table, string column)
     {
         try
         {
-            using var command = Command(connection, null, $"SELECT {column} FROM {table} WHERE 1 = 0");
+            using var command = Command(connection, null, $"SELECT {table}.{column} FROM {table} WHERE 1 = 0");
             command.ExecuteNonQuery();
 
             return true;

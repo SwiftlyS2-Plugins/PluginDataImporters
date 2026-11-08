@@ -2,10 +2,11 @@ using System.Data;
 
 namespace Ranks.Importer.Import;
 
+/// <param name="Playtime">Seconds connected, the unit Ranks stores; a source keeping another unit converts on read.</param>
 internal readonly record struct PlayerRow(
     ulong SteamId, string Name, int Points, int Kills, int Deaths, int Assists,
     int RoundWins, int RoundLosses, int MatchWins, int MatchLosses,
-    int BombsPlanted, int BombsDefused, int Headshots, int Hits, int Misses, DateTime LastSeen);
+    int BombsPlanted, int BombsDefused, int Headshots, int Hits, int Misses, DateTime LastSeen, long Playtime);
 
 internal readonly record struct WeaponRow(
     ulong SteamId, string Weapon, long Kills, long Deaths, long Headshots, long Hits, long Shots, long Damage);
